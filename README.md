@@ -277,9 +277,9 @@ Final output written as a single CSV to `s3://...`.
 
 **`get_totals_a(df, features_df, segment_name, suffixes, ...)`**
 - Per suffix, produces cohort-level summary blocks (no feature breakdown):
-  - Group block — by `brand_segment` with `pct_in_group`
-  - Total block — full rollup across all segments
-  - Exclusive / one_other / in_all blocks — overlap cohort summaries
+  - Group block - by `brand_segment` with `pct_in_group`
+  - Total block - full rollup across all segments
+  - Exclusive / one_other / in_all blocks - overlap cohort summaries
 
 **`_build_group_blocks(feature_name, df, features_df, suffix, ...)`**
 - Core aggregation helper used by `get_feature_data_a`
