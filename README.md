@@ -190,7 +190,7 @@ Final output written as a single CSV to `s3://...`.
 **Feature Construction:**
 
 | Feature Group | Columns |
-|---|---|---|
+|---|---|
 | Parental status | `is_parent`, `child_age_band`, `total_children`, `total_children_count` | 
 | Gender | `gender`, `is_male`, `is_female` | 
 | Generation | `generation_classification`, `is_gen_z`, `is_millenial`, `is_generation_x`, `is_baby_boomers`, `is_silent_generation` |
