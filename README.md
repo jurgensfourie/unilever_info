@@ -363,3 +363,59 @@ Final output written as a single CSV to `s3://...`.
 - `avg_sg` and `sales_growth` measure different things - `avg_sg` is the mean of per-member growth rates, `sales_growth` is derived from aggregated sales totals
 - `common_args` is defined as a shared dict (`df=x_df`, `features_df=shoprite_features`, `section_label`, `total_group_label`) to reduce repetition across `get_feature_total` calls
 - `multi_row_feature=True` must be explicitly set for any feature where one member can have multiple rows - omitting it will silently under-count members
+
+# Post-Shoprite Run: Omnisient Upload & Project Setup
+
+> Complete these steps **after** the Shoprite pipeline run has finished successfully.
+
+---
+
+## Step 1: Upload Output Datasets
+
+Upload the following datasets to Omnisient.
+
+### Benchmark Datasets
+> Output of `01_data_no_segmentation.ipynb`
+
+- `auto_capsules`
+- `auto_liquid`
+- `auto_powder`
+- `auto_detergent`
+- `soap_and_soap_powders`
+
+### Segmented Customer Datasets
+> Output of `01.3_data_segmentation.ipynb`
+
+- `auto_capsules_segmented`
+- `auto_liquid_segmented`
+- `auto_powder_segmented`
+
+---
+
+## Step 2: Create Omnisient Project
+
+Once all datasets are uploaded, create a new Omnisient project using the datasets below.
+
+| Dataset | Description |
+|---|---|
+| `auto_capsules` | Benchmark |
+| `auto_liquid` | Benchmark |
+| `auto_powder` | Benchmark |
+| `auto_detergent` | Benchmark |
+| `soap_and_soap_powders` | Benchmark |
+| `auto_capsules_segmented` | Segmented target group |
+| `auto_liquid_segmented` | Segmented target group |
+| `auto_powder_segmented` | Segmented target group |
+| `STRIVE_CORE_SHARE` | Internal |
+| `RM_Customer_Enhanced` | Internal |
+| `VehicleData20260327` *(or most recent)* | Vehicle data |
+| `Shoprite_Combined_Dataset` *(All Shoprite & Checkers Members)* | Shoprite |
+
+> **Note:** Always select the most recently dated vehicle dataset available (e.g. `VehicleData20260327` or newer).
+
+
+
+
+
+
+
