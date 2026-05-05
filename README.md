@@ -1,4 +1,4 @@
-## 0. 
+## 0. Prep S3 Directory/Bucket for Project
 
 **Notes:** 
 - Create folders in a s3 directory/bucket:
