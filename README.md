@@ -216,32 +216,113 @@ Final output written as a single CSV to `s3://...`.
 - Generation classification is derived from year of birth; members outside defined ranges will have `null` for `generation_classification`
 
 
-## 2. `02_member_base_profiling.ipynb`
+## 02_1_member_base.ipynb
 
-**Description:** Constructs a desired member base from Athena and generates a profiled feature summary across demographic and behavioural segments for Checkers customers.
+Builds the Checkers member base by joining transactional member data with Shoprite feature enrichment data, computes demographic and behavioural member counts across a set of features, and writes the aggregated output to S3.
 
-**Inputs:**
-| Parameter | Description |
-|---|---|
-| `end_date` | End date for the analysis window |
-| `look_back_interval` | Number of weeks to look back from end date |
-| `banner` | Banner filter applied to transaction data (e.g. `CHECKERS`) |
-| `country_code` | Country filter for transaction data (e.g. `ZA`) |
-| `member_base` | Spark DataFrame of members used as the base population |
-| `member_feature_base_df` | Spark DataFrame containing feature columns joined to members |
-| `section_label` | Label for the reporting section |
-| `total_group_label` | Label for the cohort total row |
+> **Note:** This notebook runs on **PySpark via EMR Serverless**, not the Omnisient environment. Inputs are read from S3 and outputs are written back to S3 as CSV. Sales metrics (`avg_sg`, `total_sales`, `total_sales_prev`, `sales_growth`) are intentionally `NULL` — this notebook is a **member base sizing exercise** focused on member counts and demographic distributions, not sales analysis.
 
-**Outputs:**
-- A unified Spark DataFrame (`df_all_features`) containing member counts and percentage breakdowns across all feature segments, including demographics (generation, gender, affluence, parental status, child age), pet ownership (type and counts).
-- Each row is keyed by `section`, `segment`, `cohort`, and `feature` for downstream reporting use.
+---
 
-**Notes:**
-- The Athena query filters out department `99`, zero/negative sales, and null ticket times to ensure clean transaction data.
-- `get_feature_total` supports both single-row and multi-row features via the `multi_row_feature` flag - use `True` for features where a member can have multiple rows (e.g. child ages).
-- Sales metric columns (`total_avg_sales_vals`, `total_sales`, `total_sales_prev`, `sales_growth`) are `null` as they are not needed for this set.
-- `df_shoprite_shabit` is currently commented out and excluded from the union: Since we are inspecting checkers base.
+#### Input Datasets
 
+Both inputs are read from S3 as CSV files with inferred schema.
+
+| Dataset | S3 Path | Description |
+|---|---|---|
+| `shoprite_features` | `s3://.../omo_tests/shoprite_features/` | Member-level demographic and behavioural feature enrichment |
+| `member_base` | `s3://.../omo_tests/member_base/` | Checkers transactional member base (derived from Athena - see below) |
+
+> **Member base Athena query** - filters to active Checkers members over the 27-week period ending 2026-03-31:
+> ```sql
+> SELECT
+>     b.member_id,
+>     COUNT(DISTINCT b.unique_ticket_id) AS total_shops
+> FROM prod_de_vault.fact_customer_ticket b
+> INNER JOIN prod_de_vault.dim_sap_article c
+>     ON b.article_code = c.article_code
+>     AND b.alternate_uom = c.alternate_uom
+>     AND c.key_effective_to IS NULL
+> WHERE b.country_code = 'ZA'
+>     AND b.member_id IS NOT NULL
+>     AND UPPER(b.banner) LIKE '%CHECKERS%'
+>     AND c.super_dept_no != '99'
+>     AND item_count > 0
+>     AND b.sales_amount_after_discount > 0
+>     AND b.sales_amount > 0
+>     AND b.ticket_end_time IS NOT NULL
+>     AND date_parse(CAST(b.date_key AS VARCHAR), '%Y%m%d')
+>         BETWEEN date_add('day', -27 * 7, DATE '2026-03-31') AND DATE '2026-03-31'
+> GROUP BY b.member_id
+> ```
+
+---
+
+### Steps
+
+#### 1. Load Data
+Reads `shoprite_features` and `member_base` from S3 into Spark DataFrames and registers both as temp views.
+
+#### 2. Build Member Feature Base
+Inner joins `shoprite_features` with the distinct `member_id` values from `member_base` to produce `member_feature_base_df` - the enriched Checkers member base used for all downstream aggregations.
+
+#### 3. Define Aggregate Function
+`get_feature_total` computes member counts per feature value for a given demographic dimension. For each feature it:
+- Optionally deduplicates on `member_id` (controlled by `multi_row_feature` - set to `True` for features like `child_age_band` where one member can have multiple rows)
+- Joins the member base against the feature reference
+- Groups by feature value and counts distinct members
+- Computes `pct_in_group` as each value's share of the total
+
+Sales metric columns (`avg_sg`, `total_sales`, `total_sales_prev`, `sales_growth`) are present in the schema but set to `NULL` - this notebook sizes the member base only.
+
+#### 4. Run Across Features
+The following features are profiled across the Checkers member base (~9.7M members):
+
+| Feature | Column | Multi-row |
+|---|---|---|
+| All (total base) | - | - |
+| Generation | `generation_classification` | No |
+| Gender | `gender` | No |
+| CSHI | `cshi_decile_band` | No |
+| Spend Propensity | `affluence_cat_rank` | No |
+| Parents | `is_parent` | No |
+| Child Age Band | `child_age_band` | Yes |
+| Total Children | `total_children` | No |
+| Pet | `is_pet` | No |
+| Dog | `is_dog` | No |
+| Cat | `is_cat` | No |
+| Total Pets | `total_pets_group` | No |
+| Total Dogs | `total_dogs_group` | No |
+| Total Cats | `total_cats_group` | No |
+| Checkers Shabit Segmentation | `checkers_shabit_segmentation` | No |
+
+#### 5. Union & Write
+All feature DataFrames are unioned into a single Spark DataFrame (`df_all_features`, 48 rows) and written to S3. The enriched member feature base is also written separately.
+
+---
+
+## Output
+
+| Output | S3 Path | Description |
+|---|---|---|
+| `df_all_features` | `s3://.../omo_tests/aggregated_data/checkers_base/` | Aggregated member base feature counts (48 rows) |
+| `member_feature_base_df` | `s3://.../omo_tests/auto_detergent/member_base/` | Enriched member base at member level |
+
+Output schema:
+
+| Column | Type | Description |
+|---|---|---|
+| `section` | string | Always `Checkers Base` |
+| `segment` | string | Feature display name |
+| `cohort` | string | Always `Checkers Base` |
+| `feature` | string | Feature value |
+| `avg_sg` | double | `NULL` - not applicable |
+| `total_mems` | long | Unique member count |
+| `pct_in_group` | double | Share of members within feature value |
+| `total_avg_sales_vals` | double | `NULL` - not applicable |
+| `total_sales` | double | `NULL` - not applicable |
+| `total_sales_prev` | double | `NULL` - not applicable |
+| `sales_growth` | double | `NULL` - not applicable |
 ---
 
 ## `03.1_comparisons.ipynb`
