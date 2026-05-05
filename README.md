@@ -511,7 +511,7 @@ INNER JOIN Shoprite_Prj_00393.STRIVE_CORE_SHARE_11 AS c
     ON b.DW_ID_KEY = c.DW_ID_Key
 ```
 
-## 02_strive_features.ipynb
+## `02_strive_features.ipynb`
 
 Loads the joined Strive + Shoprite dataset, computes demographic and socioeconomic feature aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
 
@@ -613,14 +613,7 @@ Shoprite_Prj_00393.strive_aggregates_df
 
 ---
 
-### Output
-
-| Table | Rows | Description |
-|---|---|---|
-| `strive_aggregates_df` | ~1,950 | Segmented + benchmark feature aggregates |
-
-
-## 03_rm_features.ipynb
+## `03_rm_features.ipynb`
 
 Loads the joined RM Customer + Shoprite dataset, computes retail credit score and basket score aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
 
@@ -733,14 +726,8 @@ Shoprite_Prj_00393.rm_aggregates_df
 
 ---
 
-### Output
 
-| Table | Rows | Description |
-|---|---|---|
-| `rm_aggregates_df` | ~640 | Segmented + benchmark RM feature aggregates |
-
-
-## 04_vehicle_features.ipynb
+## `04_vehicle_features.ipynb`
 
 Loads the joined Vehicle + Shoprite dataset, computes vehicle make and vehicle cohort aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
 
@@ -879,8 +866,12 @@ Shoprite_Prj_00393.vehicle_aggregates_df
 
 ---
 
-### Output
+# All Aggregate features are now created:
 
-| Table | Rows | Description |
-|---|---|---|
-| `vehicle_aggregates_df` | ~530 | Segmented + benchmark vehicle feature aggregates |
+- Aggregates from `02_strive_features.ipynb`: 'vehicle_aggregates_df'
+- Aggregates from `03_rm_features.ipynb`: 'rm_aggregates_df'
+- Aggregates from `04_vehicle_features.ipynb`: 'strive_aggregates_df'
+- Aggregates from `03.1_comparisons.ipynb`:  'customer_segments_aggregates'
+- Aggregates from `04_x.ipynb`: benchmark aggregates: 'capsules', 'liquid', 'powder', 'auto detergent' and 'soap and soap powders'
+
+With the aggregates above we can create the Tableau Dashboards. This changes based on number of comparison groups we are inspecting, the indexes of interest, and the depth of Tableau analysis required for a given product, category etc.
