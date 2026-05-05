@@ -218,9 +218,7 @@ Final output written as a single CSV to `s3://...`.
 
 ## 02_1_member_base.ipynb
 
-Builds the Checkers member base by joining transactional member data with Shoprite feature enrichment data, computes demographic and behavioural member counts across a set of features, and writes the aggregated output to S3.
-
-> **Note:** This notebook runs on **PySpark via EMR Serverless**, not the Omnisient environment. Inputs are read from S3 and outputs are written back to S3 as CSV. Sales metrics (`avg_sg`, `total_sales`, `total_sales_prev`, `sales_growth`) are intentionally `NULL` — this notebook is a **member base sizing exercise** focused on member counts and demographic distributions, not sales analysis.
+Builds the Checkers member base by joining transactional member data with Shoprite feature data, computes demographic and behavioural member counts across a set of features, and writes the aggregated output to S3.
 
 ---
 
