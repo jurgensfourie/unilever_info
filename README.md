@@ -413,9 +413,474 @@ Once all datasets are uploaded, create a new Omnisient project using the dataset
 
 > **Note:** Always select the most recently dated vehicle dataset available (e.g. `VehicleData20260327` or newer).
 
+# Omnisient Pipeline once Project is created.
+
+## 01_data_prep.ipynb
+
+Pulls segmented customer datasets from the Omnisient environment, standardises data types, performs a full outer join across all three product segments, computes overlap flags and sales growth per segment, and writes the final unified dataset back to the project SQL environment for downstream analysis.
+
+---
+
+### Requirements
+
+#### Libraries
+
+```python
+numpy
+pandas
+matplotlib
+seaborn
+omni_hub     # Omnisient query extension
+omni_lab     # Omnisient write utility
+```
+
+#### Input Datasets
+
+The following tables must exist in the Omnisient project (`Shoprite_Prj_00393`) before running:
+
+| Table | Description |
+|---|---|
+| `jurgensCapsulesSegmented_1` | Segmented customers - Auto Capsules |
+| `jurgensLiquidSegmented_1` | Segmented customers - Auto Liquid |
+| `jurgensPowderSegmented_1` | Segmented customers - Auto Powder |
+
+Each table is expected to share the same schema, including the following columns:
+
+| Column | Type |
+|---|---|
+| `member_id_SKey` | Identifier (unique per member) |
+| `brand_segment` | Segment label |
+| `sales_value`, `total_items`, `avg_sales_value` | Current period metrics |
+| `prev_sales_value`, `prev_total_items`, `prev_avg_sales_value` | Prior period metrics |
+| `max_date_mem`, `prev_max_date_mem` | Date columns |
+
+---
+
+### Steps
+
+#### 1. Load Data
+Queries all three segmented tables from `Shoprite_Prj_00393` via `%omni_hub` and loads them into DataFrames.
+
+#### 2. Cast Data Types
+Applies consistent dtype casting across all DataFrames:
+- Numeric columns → `float64` via `pd.to_numeric`
+- Date columns → `datetime64` via `pd.to_datetime`
+
+#### 3. Join Datasets
+Performs a full outer join across all three DataFrames on `member_id_SKey`. For each product segment, the function:
+- Deduplicates on `member_id_SKey`
+- Renames columns with a product suffix (`_liq`, `_powd`, `_caps`)
+- Computes **sales growth** `((current - previous) / previous) * 100`
+- Computes **overlap flags** per segment:
+
+| Flag | Meaning |
+|---|---|
+| `in_exclusive_{segment}` | Member appears in this segment only |
+| `in_one_other_{segment}` | Member appears in this segment + one other |
+| `in_all_{segment}` | Member appears in all three segments |
+
+#### 4. Write to SQL Environment
+Uploads the final joined DataFrame (~x rows × 34 columns) to the project SQL environment:
+
+```
+Shoprite_Prj_00393.df_final_join
+```
+
+---
+
+### Output
+
+| Table | Rows | Columns |
+|---|---|---|
+| `df_final_join` | ~870,902 | 34 |
+
+---
+
+### Next Step - SQLPad Join
+
+`df_final_join` must be joined with the Shoprite member base and any additional datasets required for analysis. This is done in the SQLPad environment. Example:
+
+```sql
+CREATE TABLE strive_omo_df
+WITH (DISTRIBUTION = ROUND_ROBIN, HEAP) AS
+SELECT a.*, c.*
+FROM Shoprite_Prj_00393.df_final_join AS a
+INNER JOIN Shoprite_Prj_00393.Shoprite_Combined_Dataset_10_MATCHING AS b
+    ON a.member_id_SKey = b.MEMBERKEY_SKEY
+INNER JOIN Shoprite_Prj_00393.STRIVE_CORE_SHARE_11 AS c
+    ON b.DW_ID_KEY = c.DW_ID_Key
+```
+
+## 02_strive_features.ipynb
+
+Loads the joined Strive + Shoprite dataset, computes demographic and socioeconomic feature aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
+
+---
+
+### Requirements
+
+#### Libraries
+
+```python
+numpy
+pandas
+matplotlib
+seaborn
+omni_hub     # Omnisient query extension
+omni_lab     # Omnisient write utility
+```
+
+#### Input Datasets
+
+The following tables must exist in `Shoprite_Prj_00393` before running. The segmented input is produced by `01_data_prep.ipynb` + the SQLPad join step. The benchmark inputs require their own SQLPad joins prior to running this notebook.
+
+| Table | Description |
+|---|---|
+| `strive_omo_df` | Joined segmented dataset (output of `01_data_prep` → SQLPad) |
+| `strive_capsule_benchmark_df` | Benchmark - Auto Capsules joined with Strive |
+| `strive_auto_detergent_benchmark_df` | Benchmark - Auto Detergent joined with Strive |
+| `strive_liquid_benchmark_df` | Benchmark - Auto Liquid joined with Strive |
+| `strive_powder_benchmark_df` | Benchmark - Auto Powder joined with Strive |
+| `strive_soap_benchmark_df` | Benchmark - Soap & Soap Powders joined with Strive |
+
+---
+
+### Steps
+
+#### 1. Load Data
+Queries `strive_omo_df` from `Shoprite_Prj_00393` via `%omni_hub` and loads it into a DataFrame.
+
+#### 2. Cast Data Types
+Applies consistent dtype casting:
+- Numeric columns → `float64` via `pd.to_numeric`
+- Date columns → `datetime64` via `pd.to_datetime`
+
+#### 3. Build Aggregate Functions
+Three functions handle feature profiling:
+
+**`_build_group_blocks`** - Produces two output blocks per product suffix:
+- A breakdown by `brand_segment` × feature value
+- A total rollup across the entire group
+
+**`_build_overlap_block`** - Produces a feature breakdown filtered to a specific overlap cohort (`exclusive`, `one_other`, or `in_all`).
+
+**`get_feature_data_a`** - Orchestrates the above for each product suffix (`liq`, `powd`, `caps`), producing five blocks per suffix: group, total, exclusive, one\_other, and in\_all.
+
+**`get_feature_total`** - Used for benchmark datasets. Calculates total stats per feature value with no brand\_segment grouping and no suffix logic.
+
+Each output block contains the following columns:
+
+| Column | Description |
+|---|---|
+| `section` | Product group label |
+| `segment` | Feature display name |
+| `cohort` | Brand segment or overlap cohort |
+| `feature` | Feature value |
+| `avg_sg` | Average sales growth (decimal) |
+| `total_mems` | Unique member count |
+| `pct_in_group` | Share of members within cohort |
+| `total_avg_sales_vals` | Count of members with valid sales growth |
+| `total_sales` | Total current period sales |
+| `total_sales_prev` | Total prior period sales |
+| `sales_growth` | Period-over-period sales growth |
+
+#### 4. Run Across STRIVE Features
+The following 13 STRIVE features are profiled across all three segmented product groups:
+
+`Age_Group`, `Marital_Status_YN`, `Director_YN`, `Entrepreneur_YN`, `Homeowner_YN`, `Number_Of_Homes`, `Credit_Active_yn`, `Salary_Prediction_4Groups`, `Social_Class`, `Province`, `Vehicleowner_YN`, `Number_Of_Vehicles`, `LSM`
+
+Output → `strive_segmented_df`
+
+#### 5. Load & Aggregate Benchmark Datasets
+Loads each benchmark table, casts dtypes, and runs `get_feature_total` across the same 13 features for each product group:
+
+| Input Table | Output DataFrame |
+|---|---|
+| `strive_capsule_benchmark_df` | `strive_caps_final` |
+| `strive_auto_detergent_benchmark_df` | `strive_detergent_final` |
+| `strive_liquid_benchmark_df` | `strive_liq_final` |
+| `strive_powder_benchmark_df` | `strive_powd_final` |
+| `strive_soap_benchmark_df` | `strive_soap_final` |
+
+All five are concatenated → `benchmark_df`
+
+#### 6. Combine & Write
+`strive_segmented_df` and `benchmark_df` are concatenated into `final_aggregate_strive` and uploaded to the project SQL environment:
+
+```
+Shoprite_Prj_00393.strive_aggregates_df
+```
+
+---
+
+### Output
+
+| Table | Rows | Description |
+|---|---|---|
+| `strive_aggregates_df` | ~1,950 | Segmented + benchmark feature aggregates |
 
 
+## 03_rm_features.ipynb
+
+Loads the joined RM Customer + Shoprite dataset, computes retail credit score and basket score aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
+
+---
+
+### Requirements
+
+#### Libraries
+
+```python
+numpy
+pandas
+matplotlib
+seaborn
+omni_hub     # Omnisient query extension
+omni_lab     # Omnisient write utility
+```
+
+#### Input Datasets
+
+The following tables must exist in `Shoprite_Prj_00393` before running. The segmented input is produced by `01_data_prep.ipynb` + the SQLPad join step. The benchmark inputs require their own SQLPad joins with `RM_Customer_Enhanced` prior to running this notebook.
+
+| Table | Description |
+|---|---|
+| `rm_omo_df` | Joined segmented dataset (output of `01_data_prep` → SQLPad join with `RM_Customer_Enhanced`) |
+| `rm_capsule_benchmark_df` | Benchmark — Auto Capsules joined with RM Customer |
+| `rm_auto_detergent_benchmark_df` | Benchmark — Auto Detergent joined with RM Customer |
+| `rm_liquid_benchmark_df` | Benchmark — Auto Liquid joined with RM Customer |
+| `rm_powder_benchmark_df` | Benchmark — Auto Powder joined with RM Customer |
+| `rm_soap_benchmark_df` | Benchmark — Soap & Soap Powders joined with RM Customer |
+
+> **SQLPad join example** (benchmark tables):
+> ```sql
+> CREATE TABLE rm_capsule_benchmark_df
+> WITH (DISTRIBUTION = ROUND_ROBIN, HEAP) AS
+> SELECT a.*, b.SRX_Retail_Credit_Score, b.SRX_Retail_Credit_Score_Category,
+>        b.BasketScore_PL_Category, b.BasketScore_PL
+> FROM Shoprite_Prj_00393.jurgensCapsulesBenchmark_1 AS a
+> INNER JOIN Shoprite_Prj_00393.RM_Customer_Enhanced_1 AS b
+>     ON a.member_id_SKey = b.MEMBERKEY_SKey
+> ```
+
+---
+
+### Steps
+
+#### 1. Load Data
+Queries `rm_omo_df` from `Shoprite_Prj_00393` via `%omni_hub` and loads it into a DataFrame.
+
+#### 2. Cast Data Types
+Applies consistent dtype casting:
+- Numeric columns → `float64` via `pd.to_numeric`
+- Date columns → `datetime64` via `pd.to_datetime`
+
+#### 3. Build Aggregate Functions
+Three functions handle feature profiling:
+
+**`_build_group_blocks`** - Produces two output blocks per product suffix:
+- A breakdown by `brand_segment` × feature value
+- A total rollup across the entire group
+
+**`_build_overlap_block`** - Produces a feature breakdown filtered to a specific overlap cohort (`exclusive`, `one_other`, or `in_all`).
+
+**`get_feature_data_a`** - Orchestrates the above for each product suffix (`liq`, `powd`, `caps`), producing five blocks per suffix: group, total, exclusive, one\_other, and in\_all.
+
+**`get_feature_total`** - Used for benchmark datasets. Calculates total stats per feature value with no brand\_segment grouping and no suffix logic.
+
+Each output block contains the following columns:
+
+| Column | Description |
+|---|---|
+| `section` | Product group label |
+| `segment` | Feature display name |
+| `cohort` | Brand segment or overlap cohort |
+| `feature` | Feature value |
+| `avg_sg` | Average sales growth (decimal) |
+| `total_mems` | Unique member count |
+| `pct_in_group` | Share of members within cohort |
+| `total_avg_sales_vals` | Count of members with valid sales growth |
+| `total_sales` | Total current period sales |
+| `total_sales_prev` | Total prior period sales |
+| `sales_growth` | Period-over-period sales growth |
+
+#### 4. Run Across RM Features
+The following 2 RM Customer features are profiled across all three segmented product groups:
+
+`SRX_Retail_Credit_Score_Category`, `BasketScore_PL_Category`
+
+Output → `rm_segmented_df`
+
+#### 5. Load & Aggregate Benchmark Datasets
+Loads each benchmark table, casts dtypes, and runs `get_feature_total` across the same 2 features for each product group:
+
+| Input Table | Output DataFrame |
+|---|---|
+| `rm_capsule_benchmark_df` | `rm_caps_final` |
+| `rm_auto_detergent_benchmark_df` | `rm_detergent_final` |
+| `rm_liquid_benchmark_df` | `rm_liq_final` |
+| `rm_powder_benchmark_df` | `rm_powd_final` |
+| `rm_soap_benchmark_df` | `rm_soap_final` |
+
+All five are concatenated → `benchmark_df`
+
+#### 6. Combine & Write
+`rm_segmented_df` and `benchmark_df` are concatenated into `final_aggregate_rm` and uploaded to the project SQL environment:
+
+```
+Shoprite_Prj_00393.rm_aggregates_df
+```
+
+---
+
+### Output
+
+| Table | Rows | Description |
+|---|---|---|
+| `rm_aggregates_df` | ~640 | Segmented + benchmark RM feature aggregates |
 
 
+## 04_vehicle_features.ipynb
 
+Loads the joined Vehicle + Shoprite dataset, computes vehicle make and vehicle cohort aggregates across all product segments and brand cohorts, runs the same aggregations across all benchmark product groups, and writes a unified aggregate output back to the project SQL environment.
 
+---
+
+### Requirements
+
+#### Libraries
+
+```python
+numpy
+pandas
+matplotlib
+seaborn
+omni_hub     # Omnisient query extension
+omni_lab     # Omnisient write utility
+```
+
+#### Input Datasets
+
+The following tables must exist in `Shoprite_Prj_00393` before running. The segmented input requires a SQLPad join with `VehicleData` prior to running this notebook. The benchmark inputs require their own equivalent SQLPad joins.
+
+| Table | Description |
+|---|---|
+| `vehicle_omo_df` | Joined segmented dataset (output of `01_data_prep` → SQLPad join with `VehicleData`) |
+| `vehicle_capsule_benchmark_df` | Benchmark - Auto Capsules joined with Vehicle data |
+| `vehicle_auto_detergent_benchmark_df` | Benchmark - Auto Detergent joined with Vehicle data |
+| `vehicle_liquid_benchmark_df` | Benchmark - Auto Liquid joined with Vehicle data |
+| `vehicle_powder_benchmark_df` | Benchmark - Auto Powder joined with Vehicle data |
+| `vehicle_soap_benchmark_df` | Benchmark - Soap & Soap Powders joined with Vehicle data |
+
+> **SQLPad join example** (segmented input table):
+> ```sql
+> CREATE TABLE vehicle_omo_df
+> WITH (DISTRIBUTION = ROUND_ROBIN, HEAP) AS
+> SELECT a.*, c.DW_ID_Key, c.Vehicle_Make, c.Vehicle_Model, c.Vehicle_Year, c.Vehicle_Owner,
+>     CASE
+>         WHEN c.Strive_Cohorts_Fleet_Owner      = 'Y' THEN 'Fleet_Owner'
+>         WHEN c.Strive_Cohorts_Luxury_Owner     = 'Y' THEN 'Luxury_Owner'
+>         WHEN c.Strive_Cohorts_French_Flair     = 'Y' THEN 'French_Flair'
+>         WHEN c.Strive_Cohorts_Classic_Collector = 'Y' THEN 'Classic_Collector'
+>         WHEN c.Strive_Cohorts_German_Luxury    = 'Y' THEN 'German_Luxury'
+>         WHEN c.Strive_Cohorts_Bakkie_Brigade   = 'Y' THEN 'Bakkie_Brigade'
+>         WHEN c.Strive_Cohorts_Taxi_Owner       = 'Y' THEN 'Taxi_Owner'
+>         WHEN c.Strive_Cohorts_Petrolhead       = 'Y' THEN 'Petrolhead'
+>         WHEN c.Strive_Cohorts_Parking_Lot_Mom  = 'Y' THEN 'Parking_Lot_Mom'
+>         WHEN c.Strive_Cohorts_Rust_Buckets     = 'Y' THEN 'Rust_Buckets'
+>         WHEN c.Strive_Cohorts_Twenty_Plenty    = 'Y' THEN 'Twenty_Plenty'
+>         WHEN c.Strive_Cohorts_4X4_Lovers       = 'Y' THEN '4X4_Lovers'
+>         WHEN c.Strive_Cohorts_Truck_Owner      = 'Y' THEN 'Truck_Owner'
+>         WHEN c.Strive_Cohorts_Bike_Club        = 'Y' THEN 'Bike_Club'
+>         WHEN c.Strive_Cohorts_Farmer           = 'Y' THEN 'Farmer'
+>         WHEN c.Strive_Cohorts_Asian_Newcomers  = 'Y' THEN 'Asian_Newcomers'
+>         WHEN c.Strive_Cohorts_Electrical_Vehicle = 'Y' THEN 'Electrical_Vehicle'
+>         ELSE ''
+>     END AS vehicle_cohorts
+> FROM Shoprite_Prj_00393.df_final_join AS a
+> INNER JOIN Shoprite_Prj_00393.Shoprite_Combined_Dataset_10_MATCHING AS b
+>     ON a.member_id_SKey = b.MEMBERKEY_SKEY
+> INNER JOIN Shoprite_Prj_00393.VehicleData20260327_12 AS c
+>     ON b.DW_ID_KEY = c.DW_ID_Key
+> ```
+
+---
+
+### Steps
+
+#### 1. Load Data
+Queries `vehicle_omo_df` from `Shoprite_Prj_00393` via `%omni_hub` and loads it into a DataFrame.
+
+#### 2. Cast Data Types
+Applies consistent dtype casting:
+- Numeric columns → `float64` via `pd.to_numeric`
+- Date columns → `datetime64` via `pd.to_datetime`
+
+#### 3. Build Aggregate Functions
+Three functions handle feature profiling:
+
+**`_build_group_blocks`** - Produces two output blocks per product suffix:
+- A breakdown by `brand_segment` × feature value
+- A total rollup across the entire group
+
+Supports an optional `include_values` filter to restrict output to a specific list of feature values (e.g. `["Toyota", "Ford", "BMW"]` for `Vehicle_Make`).
+
+**`_build_overlap_block`** - Produces a feature breakdown filtered to a specific overlap cohort (`exclusive`, `one_other`, or `in_all`). Also supports `include_values` filtering.
+
+**`get_feature_data_a`** - Orchestrates the above for each product suffix (`liq`, `powd`, `caps`), producing group, total, exclusive, one\_other, and in\_all blocks per suffix.
+
+**`get_feature_total`** - Used for benchmark datasets. Calculates total stats per feature value with no brand\_segment grouping and no suffix logic. Also supports `include_values` filtering.
+
+Each output block contains the following columns:
+
+| Column | Description |
+|---|---|
+| `section` | Product group label |
+| `segment` | Feature display name |
+| `cohort` | Brand segment or overlap cohort |
+| `feature` | Feature value |
+| `avg_sg` | Average sales growth (decimal) |
+| `total_mems` | Unique member count |
+| `pct_in_group` | Share of members within cohort |
+| `total_avg_sales_vals` | Count of members with valid sales growth |
+| `total_sales` | Total current period sales |
+| `total_sales_prev` | Total prior period sales |
+| `sales_growth` | Period-over-period sales growth |
+
+#### 4. Run Across Vehicle Features
+The following 2 vehicle features are profiled across all three segmented product groups:
+
+| Feature | Description | Filter Applied |
+|---|---|---|
+| `Vehicle_Make` | Manufacturer of the vehicle | Toyota, Ford, BMW only |
+| `vehicle_cohorts` | Derived vehicle lifestyle cohort | All cohorts |
+
+Output → `vehicle_segmented_df`
+
+#### 5. Load & Aggregate Benchmark Datasets
+Loads each benchmark table, casts dtypes, and runs `get_feature_total` across the same 2 features for each product group:
+
+| Input Table | Output DataFrame |
+|---|---|
+| `vehicle_capsule_benchmark_df` | `vehicle_caps_final` |
+| `vehicle_auto_detergent_benchmark_df` | `vehicle_detergent_final` |
+| `vehicle_liquid_benchmark_df` | `vehicle_liq_final` |
+| `vehicle_powder_benchmark_df` | `vehicle_powd_final` |
+| `vehicle_soap_benchmark_df` | `vehicle_soap_final` |
+
+All five are concatenated → `benchmark_df`
+
+#### 6. Combine & Write
+`vehicle_segmented_df` and `benchmark_df` are concatenated into `final_aggregate_vehicle` and uploaded to the project SQL environment:
+
+```
+Shoprite_Prj_00393.vehicle_aggregates_df
+```
+
+---
+
+### Output
+
+| Table | Rows | Description |
+|---|---|---|
+| `vehicle_aggregates_df` | ~530 | Segmented + benchmark vehicle feature aggregates |
