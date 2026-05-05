@@ -406,9 +406,9 @@ Once all datasets are uploaded, create a new Omnisient project using the dataset
 | `auto_capsules_segmented` | Segmented target group |
 | `auto_liquid_segmented` | Segmented target group |
 | `auto_powder_segmented` | Segmented target group |
-| `STRIVE_CORE_SHARE` | Internal |
-| `RM_Customer_Enhanced` | Internal |
-| `VehicleData20260327` *(or most recent)* | Vehicle data |
+| `STRIVE_CORE_SHARE` | STRIVE |
+| `RM_Customer_Enhanced` | STRIVE |
+| `VehicleData20260327` *(or most recent)* | STRIVE |
 | `Shoprite_Combined_Dataset` *(All Shoprite & Checkers Members)* | Shoprite |
 
 > **Note:** Always select the most recently dated vehicle dataset available (e.g. `VehicleData20260327` or newer).
